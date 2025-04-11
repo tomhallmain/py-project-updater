@@ -1,0 +1,7 @@
+*.pkl
+*.swp
+__pycache__/
+configs/*
+!configs/config_example.json
+app_info_cache*
+temp*
