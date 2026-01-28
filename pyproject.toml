@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "py-project-updater"
+version = "0.1.0"
+description = "Manage pip installations across multiple Python subprojects in a composite project."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "packaging>=21.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-cov", "ruff", "mypy"]
+
+[project.scripts]
+py-project-updater = "py_project_updater.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

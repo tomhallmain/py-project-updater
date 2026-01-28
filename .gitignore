@@ -1,7 +1,42 @@
-*.pkl
-*.swp
+# Bytecode and caches
 __pycache__/
+*.py[cod]
+*$py.class
+*.pkl
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+wheels/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# IDE and editors
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific
 configs/*
 !configs/config_example.json
 app_info_cache*
 temp*
+*.log
