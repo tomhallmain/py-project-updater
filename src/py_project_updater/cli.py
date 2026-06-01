@@ -12,6 +12,7 @@ from py_project_updater.config import (
     DEFAULT_IGNORE,
     DEFAULT_LOG_LEVEL,
     DEFAULT_MAX_DEPTH,
+    DEFAULT_VERSION_TOLERANCE,
     default_log_file_for_root,
 )
 from py_project_updater.orchestration import SubprojectManager
@@ -69,8 +70,10 @@ def main() -> None:
             test_mode=not args.execute,
             git_only=args.git_only,
             max_depth=args.max_depth,
+            version_tolerance=args.version_tolerance,
         )
-        manager.set_ignored_subprojects(args.ignore)
+        ignore = set(DEFAULT_IGNORE) | set(args.ignore or [])
+        manager.set_ignored_subprojects(list(ignore))
         manager.run()
     except Exception as e:
         logger.error("An error occurred: %s", e)
@@ -111,10 +114,22 @@ def _make_parser() -> argparse.ArgumentParser:
         help="Maximum depth to search for requirements files",
     )
     p.add_argument(
+        "--version-tolerance",
+        choices=["none", "patch", "minor"],
+        default=DEFAULT_VERSION_TOLERANCE,
+        help=(
+            "How much version difference to tolerate before flagging a conflict. "
+            "'none': flag any difference; "
+            "'patch': allow matching patch versions (X.Y.*); "
+            "'minor': allow matching major versions only (X.*.*). "
+            f"Default: {DEFAULT_VERSION_TOLERANCE}"
+        ),
+    )
+    p.add_argument(
         "--ignore",
         nargs="+",
-        default=DEFAULT_IGNORE,
-        help="Subproject names to ignore",
+        default=[],
+        help="Additional subproject names to ignore (always combined with built-in defaults)",
     )
     p.add_argument(
         "--log-level",

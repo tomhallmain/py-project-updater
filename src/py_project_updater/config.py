@@ -5,6 +5,7 @@ from typing import List
 
 # Defaults for CLI and behaviour (config file support can be added later)
 DEFAULT_MAX_DEPTH = 3
+DEFAULT_VERSION_TOLERANCE = "minor"  # "none" | "patch" | "minor"
 DEFAULT_IGNORE: List[str] = [
     "venv",
     ".git",

@@ -85,7 +85,7 @@ class PipInstaller:
             error_message is None if successful, or contains the error message if failed
         """
         pip_exe = self._pip_path(env_path)
-        spec = f"{package}=={version}" if version else package
+        spec = f"{package}{version}" if version else package
         pip_cmd = [pip_exe, "install", spec]
 
         if self.test_mode.enabled:

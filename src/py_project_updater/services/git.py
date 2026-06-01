@@ -1,5 +1,6 @@
 """Git operations for subprojects."""
 
+import fnmatch
 import logging
 import shutil
 import subprocess
@@ -177,14 +178,9 @@ class GitManager:
 
         if working_status in ["?", "M"] or index_status in ["M", "A"]:
             for pattern in self.PYTHON_IGNORE_PATTERNS:
-                matches = (
-                    filename.endswith(pattern.rstrip("/"))
-                    or (
-                        pattern.endswith("/")
-                        and filename.startswith(pattern)
-                    )
-                )
-                if matches:
+                if fnmatch.fnmatch(filename, pattern) or (
+                    pattern.endswith("/") and filename.startswith(pattern)
+                ):
                     logger.debug(f"Match found! Pattern: {pattern}, Filename: {filename}")
                     return True
             logger.debug(f"No matches found for filename: {filename}")
@@ -206,7 +202,7 @@ class GitManager:
             if status_result.returncode != 0:
                 return False, "Failed to get Git status", False
 
-            raw_status_lines = status_result.stdout.strip().split("\n")
+            raw_status_lines = [l for l in status_result.stdout.strip().split("\n") if l]
             logger.debug(f"Raw Git status lines: {raw_status_lines}")
 
             relevant_changes = []

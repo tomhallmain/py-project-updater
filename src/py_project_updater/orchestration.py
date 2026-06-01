@@ -2,14 +2,15 @@
 
 import logging
 from pathlib import Path
-from typing import List
+from typing import Dict, List
 
-from py_project_updater.models import SubprojectInfo
+from py_project_updater.models import Package, SubprojectInfo
 from py_project_updater.reporting import TestModeManager
 from py_project_updater.services.finder import SubprojectFinder
 from py_project_updater.services.github_commit import GitHubCommitChecker
 from py_project_updater.services.git import GitManager
 from py_project_updater.services.pip_installer import PipInstaller
+from py_project_updater.services.version_comparator import VersionComparator
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +25,13 @@ class SubprojectManager:
         test_mode: bool = False,
         git_only: bool = False,
         max_depth: int = 2,
+        version_tolerance: str = "minor",
     ):
         self.root_path = root_path
         self.env_path = env_path
         self.ignored_subprojects: set = set()
+        self.main_requirements: Dict[str, Package] = {}
+        self.version_tolerance = version_tolerance
         self.test_mode = TestModeManager(enabled=test_mode, root_path=root_path)
         self.git_manager = GitManager(self.test_mode)
         self.pip_installer = PipInstaller(self.test_mode)
@@ -47,6 +51,14 @@ class SubprojectManager:
         """Discover and process all subprojects."""
         subprojects = SubprojectFinder.find_subprojects(self.root_path, self.max_depth)
         self.test_mode.subprojects = subprojects
+
+        main = next((s for s in subprojects if s.path == self.root_path), None)
+        self.main_requirements = main.requirements if main else {}
+        if self.main_requirements:
+            logger.info(
+                "Loaded %d main project requirements for conflict checking",
+                len(self.main_requirements),
+            )
 
         for subproject in subprojects:
             if subproject.name in self.ignored_subprojects:
@@ -109,6 +121,22 @@ class SubprojectManager:
             if self.git_only:
                 logger.info("Skipping pip installations (--git-only mode)")
                 return
+
+            if self.main_requirements and subproject.path != self.root_path:
+                for package_name, package in subproject.requirements.items():
+                    main_pkg = self.main_requirements.get(package_name)
+                    if main_pkg and VersionComparator.compare_versions(main_pkg, package, self.version_tolerance):
+                        conflict_msg = (
+                            f"Version conflict for {package_name}: "
+                            f"main requires {main_pkg.version}, "
+                            f"subproject requires {package.version}"
+                        )
+                        logger.warning(conflict_msg)
+                        self.test_mode.log_operation(
+                            True,
+                            f"Warning: {conflict_msg}",
+                            project_name=subproject.name,
+                        )
 
             failed_packages: List[str] = []
 
