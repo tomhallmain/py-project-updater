@@ -9,7 +9,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-class GitHubCommitChecker:
+class GitCommitChecker:
     """Checks Git commit dates for subprojects."""
 
     @staticmethod

@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Dict, List
 
 from py_project_updater.models import Package, SubprojectInfo
-from py_project_updater.reporting import TestModeManager
+from py_project_updater.reporting import RunReporter
 from py_project_updater.services.finder import SubprojectFinder
-from py_project_updater.services.github_commit import GitHubCommitChecker
+from py_project_updater.services.git_commit import GitCommitChecker
 from py_project_updater.services.git import GitManager
 from py_project_updater.services.pip_installer import PipInstaller
 from py_project_updater.services.version_comparator import VersionComparator
@@ -32,9 +32,9 @@ class SubprojectManager:
         self.ignored_subprojects: set = set()
         self.main_requirements: Dict[str, Package] = {}
         self.version_tolerance = version_tolerance
-        self.test_mode = TestModeManager(enabled=test_mode, root_path=root_path)
-        self.git_manager = GitManager(self.test_mode)
-        self.pip_installer = PipInstaller(self.test_mode)
+        self.reporter = RunReporter(enabled=test_mode, root_path=root_path)
+        self.git_manager = GitManager(self.reporter)
+        self.pip_installer = PipInstaller(self.reporter)
         self.git_only = git_only
         self.max_depth = max_depth
 
@@ -45,12 +45,12 @@ class SubprojectManager:
     def run(self) -> None:
         """Run the subproject manager: discover subprojects, process each, then print summary."""
         self.process_subprojects()
-        print(self.test_mode.get_summary())
+        print(self.reporter.get_summary())
 
     def process_subprojects(self) -> None:
         """Discover and process all subprojects."""
         subprojects = SubprojectFinder.find_subprojects(self.root_path, self.max_depth)
-        self.test_mode.subprojects = subprojects
+        self.reporter.subprojects = subprojects
 
         main = next((s for s in subprojects if s.path == self.root_path), None)
         self.main_requirements = main.requirements if main else {}
@@ -87,7 +87,7 @@ class SubprojectManager:
                     subproject.path
                 )
                 logger.info("Git status: %s", status_msg)
-                self.test_mode.log_operation(
+                self.reporter.log_operation(
                     True,
                     f"Git status: {status_msg}",
                     project_name=subproject.name,
@@ -96,7 +96,7 @@ class SubprojectManager:
                 success, message = self.git_manager.update_repository(subproject.path)
                 if not success:
                     logger.warning("Warning: Git update failed for %s", subproject.name)
-                    self.test_mode.log_operation(
+                    self.reporter.log_operation(
                         False,
                         f"Git update failed: {message}",
                         project_name=subproject.name,
@@ -105,13 +105,13 @@ class SubprojectManager:
                     return
                 if "up to date" not in message.lower():
                     logger.info("%s", message)
-                    self.test_mode.log_operation(True, message, project_name=subproject.name)
+                    self.reporter.log_operation(True, message, project_name=subproject.name)
                 else:
-                    self.test_mode.log_operation(
+                    self.reporter.log_operation(
                         True, "Repository up to date", project_name=subproject.name
                     )
 
-                last_commit = GitHubCommitChecker.get_last_commit_date(subproject.path)
+                last_commit = GitCommitChecker.get_last_commit_date(subproject.path)
                 if last_commit:
                     logger.info("Last commit date: %s", last_commit)
                     subproject.last_commit_date = last_commit
@@ -132,7 +132,7 @@ class SubprojectManager:
                             f"subproject requires {package.version}"
                         )
                         logger.warning(conflict_msg)
-                        self.test_mode.log_operation(
+                        self.reporter.log_operation(
                             True,
                             f"Warning: {conflict_msg}",
                             project_name=subproject.name,
@@ -147,12 +147,12 @@ class SubprojectManager:
                 )
                 if success:
                     logger.info("Installed %s", package)
-                    self.test_mode.log_operation(
+                    self.reporter.log_operation(
                         True, f"Installed {package}", project_name=subproject.name
                     )
                 else:
                     logger.warning("Failed to install %s: %s", package, error)
-                    self.test_mode.log_operation(
+                    self.reporter.log_operation(
                         False,
                         f"Failed to install {package}: {error}",
                         project_name=subproject.name,
@@ -168,6 +168,6 @@ class SubprojectManager:
             error_msg = f"Error processing subproject: {e!s}"
             logger.error("%s", error_msg)
             subproject.error = error_msg
-            self.test_mode.log_operation(
+            self.reporter.log_operation(
                 False, error_msg, project_name=subproject.name
             )

@@ -9,8 +9,8 @@ from py_project_updater.models import OperationResult, SubprojectInfo
 logger = logging.getLogger(__name__)
 
 
-class TestModeManager:
-    """Manages test mode operations and logging."""
+class RunReporter:
+    """Records operations and formats the run summary."""
 
     def __init__(
         self,

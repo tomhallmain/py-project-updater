@@ -29,7 +29,7 @@ class TestSubprojectManagerE2E:
         # run() calls process_subprojects then print(get_summary())
         manager.run()
         # If we get here without exception, the run completed
-        assert len(manager.test_mode.subprojects) == 0
+        assert len(manager.reporter.subprojects) == 0
 
     def test_run_with_one_subproject_logs_operations(self, tmp_root: Path):
         """With one subproject (requirements.txt + .git), run() discovers it and logs."""
@@ -46,7 +46,7 @@ class TestSubprojectManagerE2E:
             max_depth=2,
         )
         manager.run()
-        assert len(manager.test_mode.subprojects) >= 1
-        assert any(s.name == "sub" for s in manager.test_mode.subprojects)
+        assert len(manager.reporter.subprojects) >= 1
+        assert any(s.name == "sub" for s in manager.reporter.subprojects)
         # In test mode, git/pip are not run but operations are logged
-        assert len(manager.test_mode.operations) >= 1
+        assert len(manager.reporter.operations) >= 1

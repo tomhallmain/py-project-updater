@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from py_project_updater.reporting import TestModeManager
+from py_project_updater.reporting import RunReporter
 from py_project_updater.services.pip_installer import PipInstaller
 
 
@@ -13,14 +13,14 @@ class TestPipInstallerTestMode:
     """Tests when test mode is enabled (no real pip calls)."""
 
     def test_install_requirements_succeeds_in_test_mode(
-        self, tmp_root: Path, test_mode_manager: TestModeManager
+        self, tmp_root: Path, test_mode_manager: RunReporter
     ):
         req_file = tmp_root / "requirements.txt"
         req_file.write_text("requests==2.28.0\n", encoding="utf-8")
         env_path = tmp_root / "venv"
         env_path.mkdir()
 
-        installer = PipInstaller(test_mode=test_mode_manager)
+        installer = PipInstaller(reporter=test_mode_manager)
         success, err = installer.install_requirements(req_file, env_path)
         assert success is True
         assert err is None
@@ -29,12 +29,12 @@ class TestPipInstallerTestMode:
         assert "requirements" in (test_mode_manager.operations[0].message or "").lower()
 
     def test_install_package_succeeds_in_test_mode(
-        self, tmp_root: Path, test_mode_manager: TestModeManager
+        self, tmp_root: Path, test_mode_manager: RunReporter
     ):
         env_path = tmp_root / "venv"
         env_path.mkdir()
 
-        installer = PipInstaller(test_mode=test_mode_manager)
+        installer = PipInstaller(reporter=test_mode_manager)
         success, err = installer.install_package("requests", "2.28.0", env_path)
         assert success is True
         assert err is None
@@ -46,7 +46,7 @@ class TestPipInstallerPipPath:
     """Tests for _pip_path behaviour."""
 
     def test_pip_path_contains_scripts_or_bin_and_pip(self):
-        installer = PipInstaller(test_mode=TestModeManager(enabled=True))
+        installer = PipInstaller(reporter=RunReporter(enabled=True))
         env = Path("C:/venv")
         path = installer._pip_path(env)
         if os.name == "nt":

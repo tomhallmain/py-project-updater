@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from py_project_updater.reporting import TestModeManager
+from py_project_updater.reporting import RunReporter
 
 
 @pytest.fixture
@@ -14,6 +14,6 @@ def tmp_root(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def test_mode_manager() -> TestModeManager:
-    """TestModeManager with test mode enabled (no real subprocess calls)."""
-    return TestModeManager(enabled=True)
+def test_mode_manager() -> RunReporter:
+    """RunReporter with test mode enabled (no real subprocess calls)."""
+    return RunReporter(enabled=True)

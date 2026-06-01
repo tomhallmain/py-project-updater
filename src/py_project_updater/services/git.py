@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
-from py_project_updater.reporting import TestModeManager
+from py_project_updater.reporting import RunReporter
 
 logger = logging.getLogger(__name__)
 
@@ -33,13 +33,13 @@ class GitManager:
         "*.egg",
     ]
 
-    def __init__(self, test_mode: TestModeManager):
-        self.test_mode = test_mode
+    def __init__(self, reporter: RunReporter):
+        self.reporter = reporter
 
     def is_git_repo(self, path: Path) -> bool:
         """Check if a directory is a Git repository."""
-        if self.test_mode.enabled:
-            self.test_mode.log_operation(
+        if self.reporter.enabled:
+            self.reporter.log_operation(
                 True,
                 f"Checking if {path} is a Git repository",
                 "git rev-parse --is-inside-work-tree",
@@ -59,8 +59,8 @@ class GitManager:
 
     def get_remote_url(self, path: Path) -> Optional[str]:
         """Get the remote URL for a Git repository."""
-        if self.test_mode.enabled:
-            self.test_mode.log_operation(
+        if self.reporter.enabled:
+            self.reporter.log_operation(
                 True,
                 f"Getting remote URL for {path}",
                 "git remote get-url origin",
@@ -85,8 +85,8 @@ class GitManager:
 
     def _clean_python_artifacts(self, path: Path) -> None:
         """Restore modified/deleted files to their tracked state."""
-        if self.test_mode.enabled:
-            self.test_mode.log_operation(
+        if self.reporter.enabled:
+            self.reporter.log_operation(
                 True,
                 f"Would restore modified/deleted files in {path}",
                 "git checkout -- .",
@@ -237,10 +237,10 @@ class GitManager:
         """Update the repository based on its status."""
         is_clean, status_msg, was_cleaned_by_filtering = self.get_git_status(path)
 
-        if self.test_mode.enabled:
+        if self.reporter.enabled:
             if not is_clean or "up to date" not in status_msg.lower():
                 operation = "pull" if is_clean else "fetch"
-                self.test_mode.log_operation(
+                self.reporter.log_operation(
                     True,
                     f"Would {operation} changes for {path}",
                     f"git {operation}",

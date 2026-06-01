@@ -5,14 +5,14 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
-from py_project_updater.reporting import TestModeManager
+from py_project_updater.reporting import RunReporter
 
 
 class PipInstaller:
     """Handles pip installation in the correct virtual environment."""
 
-    def __init__(self, test_mode: TestModeManager):
-        self.test_mode = test_mode
+    def __init__(self, reporter: RunReporter):
+        self.reporter = reporter
 
     def _pip_path(self, env_path: Path) -> str:
         """Return path to pip executable for the given environment."""
@@ -37,8 +37,8 @@ class PipInstaller:
             str(requirements_file),
         ]
 
-        if self.test_mode.enabled:
-            self.test_mode.log_operation(
+        if self.reporter.enabled:
+            self.reporter.log_operation(
                 True,
                 f"Would install requirements from {requirements_file}",
                 " ".join(pip_cmd),
@@ -88,8 +88,8 @@ class PipInstaller:
         spec = f"{package}{version}" if version else package
         pip_cmd = [pip_exe, "install", spec]
 
-        if self.test_mode.enabled:
-            self.test_mode.log_operation(
+        if self.reporter.enabled:
+            self.reporter.log_operation(
                 True,
                 f"Would install package: {package}{'==' + version if version else ''}",
                 " ".join(pip_cmd),
