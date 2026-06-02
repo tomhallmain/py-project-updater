@@ -56,6 +56,18 @@ def main() -> None:
     _configure_logging(level=args.log_level, log_file=log_file)
     _validate_env(args.env_path)
 
+    if args.execute:
+        python_exe = _get_python_exe(args.env_path)
+        if _is_env_in_use(python_exe):
+            logger.warning(
+                "The Python environment appears to be in use by a running process. "
+                "Pip installations may fail on locked extension modules. "
+                "Consider stopping any running processes before proceeding."
+            )
+        if not _confirm_execute(args):
+            logger.info("Update cancelled.")
+            return
+
     logger.info("Starting subproject manager with root path: %s", args.root_path)
     logger.info("Using environment: %s", args.env_path)
     logger.info("Mode: %s", "EXECUTE" if args.execute else "TEST (no changes)")
@@ -170,16 +182,19 @@ def _make_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _get_python_exe(env_path: Path) -> Path:
+    """Return the path to the Python executable for the given environment."""
+    if os.name == "nt":
+        return env_path / "Scripts" / "python.exe"
+    return env_path / "bin" / "python"
+
+
 def _validate_env(env_path: Path) -> None:
     """Ensure env_path exists and contains a valid Python executable."""
     if not env_path.exists():
         raise ValueError(f"Please provide a valid Python virtual environment path: {env_path}")
 
-    python_exe = (
-        env_path / "Scripts" / "python.exe"
-        if os.name == "nt"
-        else env_path / "bin" / "python"
-    )
+    python_exe = _get_python_exe(env_path)
     if not python_exe.exists():
         raise ValueError(f"Python executable not found in environment: {python_exe}")
 
@@ -196,6 +211,89 @@ def _validate_env(env_path: Path) -> None:
         if isinstance(e, ValueError):
             raise
         raise ValueError(f"Failed to verify Python installation: {e!s}") from e
+
+
+def _is_env_in_use(python_exe: Path) -> bool:
+    """Return True if any running process is using the given Python executable.
+
+    Uses psutil when available (most reliable, all platforms). Falls back to
+    platform-specific approaches: /proc scan on Linux, lsof on macOS,
+    exclusive-open attempt on Windows.
+    """
+    target = python_exe.resolve()
+    try:
+        import psutil
+        for proc in psutil.process_iter(["exe"]):
+            try:
+                if proc.info["exe"] and Path(proc.info["exe"]).resolve() == target:
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        return False
+    except ImportError:
+        pass
+
+    if sys.platform == "linux":
+        for pid_dir in Path("/proc").iterdir():
+            if not pid_dir.name.isdigit():
+                continue
+            try:
+                if (pid_dir / "exe").resolve() == target:
+                    return True
+            except OSError:
+                pass
+        return False
+
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["lsof", "-w", str(target)],
+                capture_output=True,
+                text=True,
+            )
+            return bool(result.stdout.strip())
+        except FileNotFoundError:
+            return False
+
+    # Windows fallback: try opening the executable for writing.
+    # This is a best-effort check — it can produce false negatives since
+    # Windows does not always lock the .exe itself, only loaded DLLs.
+    try:
+        with open(target, "r+b"):
+            return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _confirm_execute(args: argparse.Namespace) -> bool:
+    """Prompt the user to confirm before running in execute mode.
+
+    Returns True to proceed, False to cancel. Skips the prompt and returns
+    True automatically when stdin is not a terminal (scripts, CI).
+    """
+    if not sys.stdin.isatty():
+        logger.info("Non-interactive session — skipping execute confirmation.")
+        return True
+
+    print("\nAbout to run in EXECUTE mode. The following changes will be made:")
+    print(f"  Root path  : {args.root_path}")
+    print(f"  Environment: {args.env_path}")
+    if args.git_only:
+        print("  Git operations only (no pip installations)")
+    else:
+        print("  Git repositories will be updated")
+        print("  Packages will be installed into the environment")
+    print()
+
+    try:
+        answer = input("Proceed? [y/N]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+    return answer in ("y", "yes")
 
 
 def _configure_logging(
