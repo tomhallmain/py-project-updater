@@ -183,9 +183,19 @@ def _make_parser() -> argparse.ArgumentParser:
 
 
 def _get_python_exe(env_path: Path) -> Path:
-    """Return the path to the Python executable for the given environment."""
+    """Return the path to the Python executable for the given environment.
+
+    On Windows, checks both the standard venv location (Scripts\\python.exe)
+    and the conda layout (python.exe at the env root), returning whichever exists.
+    """
     if os.name == "nt":
-        return env_path / "Scripts" / "python.exe"
+        for candidate in [
+            env_path / "Scripts" / "python.exe",  # standard venv / virtualenv
+            env_path / "python.exe",               # conda on Windows
+        ]:
+            if candidate.exists():
+                return candidate
+        return env_path / "Scripts" / "python.exe"  # fallback for error reporting
     return env_path / "bin" / "python"
 
 
