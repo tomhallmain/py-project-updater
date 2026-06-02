@@ -233,9 +233,19 @@ class GitManager:
         except Exception as e:
             return False, f"Error checking Git status: {str(e)}", False
 
-    def update_repository(self, path: Path) -> Tuple[bool, str]:
-        """Update the repository based on its status."""
-        is_clean, status_msg, was_cleaned_by_filtering = self.get_git_status(path)
+    def update_repository(
+        self,
+        path: Path,
+        status: Optional[Tuple[bool, str, bool]] = None,
+    ) -> Tuple[bool, str]:
+        """Update the repository based on its status.
+
+        Pass the result of a prior get_git_status call as `status` to avoid
+        running the subprocess a second time.
+        """
+        is_clean, status_msg, was_cleaned_by_filtering = (
+            status if status is not None else self.get_git_status(path)
+        )
 
         if self.reporter.enabled:
             if not is_clean or "up to date" not in status_msg.lower():

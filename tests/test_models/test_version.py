@@ -64,12 +64,23 @@ class TestVersion:
         assert v.is_compatible_with("1.9.9") is True
         assert v.is_compatible_with("2.0.0") is False
 
-    def test_compatible_tilde_equals_same_major(self):
+    def test_compatible_tilde_equals_three_component(self):
+        # ~=2.1.0 means >=2.1.0, ==2.1.* — upper bound is 2.2, not 3.0
         v = Version(VersionSpecifier.COMPATIBLE, "2.1.0")
-        assert v.is_compatible_with("2.1.0") is True
-        assert v.is_compatible_with("2.9.9") is True
-        assert v.is_compatible_with("3.0.0") is False
-        assert v.is_compatible_with("2.0.9") is False
+        assert v.is_compatible_with("2.1.0") is True   # exact lower bound
+        assert v.is_compatible_with("2.1.9") is True   # within same minor
+        assert v.is_compatible_with("2.2.0") is False  # next minor — out of range
+        assert v.is_compatible_with("2.9.9") is False  # same major, different minor
+        assert v.is_compatible_with("3.0.0") is False  # different major
+        assert v.is_compatible_with("2.0.9") is False  # below lower bound
+
+    def test_compatible_tilde_equals_two_component(self):
+        # ~=2.1 means >=2.1, ==2.* — upper bound is 3.0
+        v = Version(VersionSpecifier.COMPATIBLE, "2.1")
+        assert v.is_compatible_with("2.1") is True
+        assert v.is_compatible_with("2.9") is True   # same major, higher minor — within range
+        assert v.is_compatible_with("3.0") is False  # next major — out of range
+        assert v.is_compatible_with("2.0") is False  # below lower bound
 
     def test_not_equal_different_compatible(self):
         v = Version(VersionSpecifier.NOT_EQUAL, "2.0.0")

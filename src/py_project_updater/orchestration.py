@@ -83,9 +83,8 @@ class SubprojectManager:
                     subproject.github_url = github_url
                     logger.info("GitHub URL: %s", github_url)
 
-                is_clean, status_msg, was_cleaned_by_filtering = self.git_manager.get_git_status(
-                    subproject.path
-                )
+                git_status = self.git_manager.get_git_status(subproject.path)
+                _, status_msg, _ = git_status
                 logger.info("Git status: %s", status_msg)
                 self.reporter.log_operation(
                     True,
@@ -93,7 +92,7 @@ class SubprojectManager:
                     project_name=subproject.name,
                 )
 
-                success, message = self.git_manager.update_repository(subproject.path)
+                success, message = self.git_manager.update_repository(subproject.path, status=git_status)
                 if not success:
                     logger.warning("Warning: Git update failed for %s", subproject.name)
                     self.reporter.log_operation(

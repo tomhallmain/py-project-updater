@@ -44,8 +44,14 @@ class Version:
             elif self.specifier == VersionSpecifier.LESS:
                 return other < current
             elif self.specifier == VersionSpecifier.COMPATIBLE:
-                next_major = pkg_version.Version(f"{current.major + 1}.0.0")
-                return other >= current and other < next_major
+                # ~=X.Y.Z → >=X.Y.Z, ==X.Y.* (upper bound is next minor, not next major)
+                # ~=X.Y   → >=X.Y,   ==X.*   (upper bound is next major)
+                # Algorithm: drop the last component, increment the new last component.
+                parts = self.version.split(".")
+                prefix = parts[:-1]
+                prefix[-1] = str(int(prefix[-1]) + 1)
+                upper = pkg_version.Version(".".join(prefix))
+                return other >= current and other < upper
             elif self.specifier == VersionSpecifier.NOT_EQUAL:
                 return other != current
         except pkg_version.InvalidVersion:
