@@ -115,14 +115,16 @@ class ConflictResolver:
             k: (main_weight if k == "__main__" else sub_weight) for k in scalars
         }
 
-        # Scale subproject weights by recency and re-normalise
+        # Scale subproject weights by recency, then always normalise to sum to 1.
+        # Normalisation is unconditional so the math holds when there is no main
+        # package (weights would otherwise sum to 1 - main_weight, not 1).
         if sub_recency_factors:
             for k in weights:
                 if k != "__main__":
                     weights[k] *= sub_recency_factors.get(k, 1.0)
-            total = sum(weights.values())
-            if total > 0:
-                weights = {k: v / total for k, v in weights.items()}
+        total = sum(weights.values())
+        if total > 0:
+            weights = {k: v / total for k, v in weights.items()}
 
         mean = sum(scalars[k] * weights[k] for k in scalars)
         variance = sum(weights[k] * (scalars[k] - mean) ** 2 for k in scalars)
