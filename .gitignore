@@ -39,4 +39,5 @@ configs/*
 !configs/config_example.json
 app_info_cache*
 temp*
+stash_recovery/
 *.log

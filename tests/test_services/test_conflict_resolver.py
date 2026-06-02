@@ -8,6 +8,7 @@ from py_project_updater.models import Package, VersionSpecifier
 from py_project_updater.models.version import Version
 from py_project_updater.services.conflict_resolver import (
     ConflictResolver,
+    _pick_best_spec,
     _version_to_scalar,
 )
 
@@ -273,3 +274,204 @@ class TestFindOutliers:
         # Without main, subs share all weight — node_d may still be an outlier
         # (depends on distribution); at minimum the result type is correct
         assert isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# _pick_best_spec
+# ---------------------------------------------------------------------------
+
+def _ver(spec: VersionSpecifier, ver: str) -> "Version":
+    from py_project_updater.models.version import Version
+    return Version(specifier=spec, version=ver)
+
+
+class TestPickBestSpec:
+
+    def test_exact_pin_beats_lower_bound(self):
+        packages = [
+            Package(name="x", version=_ver(VersionSpecifier.GREATER_EQUAL, "1.0.0")),
+            Package(name="x", version=_ver(VersionSpecifier.EXACT, "1.5.0")),
+        ]
+        result, warnings = _pick_best_spec(packages)
+        assert result is not None
+        assert result.specifier == VersionSpecifier.EXACT
+        assert result.version == "1.5.0"
+
+    def test_highest_exact_pin_wins(self):
+        packages = [
+            Package(name="x", version=_ver(VersionSpecifier.EXACT, "1.2.0")),
+            Package(name="x", version=_ver(VersionSpecifier.EXACT, "1.5.0")),
+            Package(name="x", version=_ver(VersionSpecifier.EXACT, "1.3.0")),
+        ]
+        result, warnings = _pick_best_spec(packages)
+        assert result is not None
+        assert result.version == "1.5.0"
+
+    def test_highest_lower_bound_wins(self):
+        packages = [
+            Package(name="x", version=_ver(VersionSpecifier.GREATER_EQUAL, "1.24.0")),
+            Package(name="x", version=_ver(VersionSpecifier.GREATER_EQUAL, "1.25.0")),
+            Package(name="x", version=_ver(VersionSpecifier.GREATER_EQUAL, "1.20.0")),
+        ]
+        result, warnings = _pick_best_spec(packages)
+        assert result is not None
+        assert result.version == "1.25.0"
+
+    def test_unconstrained_returns_none(self):
+        packages = [
+            Package(name="x", version=None),
+            Package(name="x", version=None),
+        ]
+        result, warnings = _pick_best_spec(packages)
+        assert result is None
+
+    def test_upper_bound_used_when_only_constraint(self):
+        packages = [
+            Package(name="x", version=_ver(VersionSpecifier.LESS, "3.0.0")),
+            Package(name="x", version=_ver(VersionSpecifier.LESS, "2.0.0")),
+        ]
+        result, warnings = _pick_best_spec(packages)
+        assert result is not None
+        assert result.specifier == VersionSpecifier.LESS
+        assert result.version == "2.0.0"
+
+    def test_empty_list_returns_none(self):
+        result, warnings = _pick_best_spec([])
+        assert result is None
+
+    def test_mixed_constrained_and_unconstrained(self):
+        packages = [
+            Package(name="x", version=None),
+            Package(name="x", version=_ver(VersionSpecifier.GREATER_EQUAL, "2.0.0")),
+        ]
+        result, warnings = _pick_best_spec(packages)
+        assert result is not None
+        assert result.version == "2.0.0"
+
+    # --- VersionComparator integration: conflict detection ---
+
+    def test_exact_pin_below_main_lower_bound_warns(self):
+        main_pkg = Package(name="numpy", version=_ver(VersionSpecifier.GREATER_EQUAL, "1.25.0"))
+        sub_pkg = Package(name="numpy", version=_ver(VersionSpecifier.EXACT, "1.20.0"))
+        result, warnings = _pick_best_spec([main_pkg, sub_pkg], main_package=main_pkg)
+        assert result is not None
+        assert result.specifier == VersionSpecifier.GREATER_EQUAL
+        assert result.version == "1.25.0"
+        assert any("1.20" in w for w in warnings)
+
+    def test_opposing_bounds_warns(self):
+        sub_a = Package(name="torch", version=_ver(VersionSpecifier.GREATER_EQUAL, "2.0.0"))
+        sub_b = Package(name="torch", version=_ver(VersionSpecifier.LESS, "1.5.0"))
+        result, warnings = _pick_best_spec([sub_a, sub_b], main_package=None)
+        assert result is not None
+        assert result.specifier == VersionSpecifier.GREATER_EQUAL
+        assert result.version == "2.0.0"
+        assert any("1.5" in w for w in warnings)
+
+    def test_compatible_specs_no_warnings(self):
+        main_pkg = Package(name="numpy", version=_ver(VersionSpecifier.GREATER_EQUAL, "1.25.0"))
+        sub_pkg = Package(name="numpy", version=_ver(VersionSpecifier.EXACT, "1.26.4"))
+        result, warnings = _pick_best_spec([main_pkg, sub_pkg], main_package=main_pkg)
+        assert result is not None
+        assert result.specifier == VersionSpecifier.EXACT
+        assert result.version == "1.26.4"
+        assert warnings == []
+
+    def test_main_exact_pin_beats_subproject_pin(self):
+        main_pkg = Package(name="numpy", version=_ver(VersionSpecifier.EXACT, "1.26.4"))
+        sub_pkg = Package(name="numpy", version=_ver(VersionSpecifier.EXACT, "1.20.0"))
+        result, warnings = _pick_best_spec([main_pkg, sub_pkg], main_package=main_pkg)
+        assert result is not None
+        assert result.specifier == VersionSpecifier.EXACT
+        assert result.version == "1.26.4"
+        assert len(warnings) > 0
+        assert any("1.20" in w for w in warnings)
+
+    def test_all_unconstrained_no_warnings(self):
+        packages = [Package(name="x", version=None), Package(name="x", version=None)]
+        result, warnings = _pick_best_spec(packages, main_package=None)
+        assert result is None
+        assert warnings == []
+
+
+# ---------------------------------------------------------------------------
+# ConflictResolver.resolve_requirements
+# ---------------------------------------------------------------------------
+
+class TestResolveRequirements:
+
+    def _pkg(self, spec, ver):
+        return Package(name="pkg", version=Version(specifier=spec, version=ver))
+
+    def _reqs(self, mapping):
+        return {
+            sub: {pkg: Package(name=pkg, version=Version(specifier=spec, version=ver))
+                  for pkg, (spec, ver) in pkgs.items()}
+            for sub, pkgs in mapping.items()
+        }
+
+    def test_single_subproject_passes_through(self):
+        reqs = self._reqs({"sub_a": {"numpy": (VersionSpecifier.GREATER_EQUAL, "1.25.0")}})
+        result = ConflictResolver.resolve_requirements(reqs, outlier_map={})
+        assert "numpy" in result
+        assert result["numpy"].version is not None
+        assert result["numpy"].version.version == "1.25.0"
+
+    def test_outlier_requirement_dropped(self):
+        reqs = self._reqs({
+            "sub_a": {"numpy": (VersionSpecifier.GREATER_EQUAL, "1.25.0")},
+            "sub_b": {"numpy": (VersionSpecifier.EXACT, "1.10.0")},
+        })
+        result = ConflictResolver.resolve_requirements(
+            reqs, outlier_map={"numpy": ["sub_b"]}
+        )
+        assert result["numpy"].version is not None
+        assert result["numpy"].version.version == "1.25.0"
+        assert result["numpy"].version.specifier == VersionSpecifier.GREATER_EQUAL
+
+    def test_highest_lower_bound_selected(self):
+        reqs = self._reqs({
+            "sub_a": {"torch": (VersionSpecifier.GREATER_EQUAL, "2.0.0")},
+            "sub_b": {"torch": (VersionSpecifier.GREATER_EQUAL, "1.9.0")},
+            "sub_c": {"torch": (VersionSpecifier.GREATER_EQUAL, "2.1.0")},
+        })
+        result = ConflictResolver.resolve_requirements(reqs, outlier_map={})
+        assert result["torch"].version.version == "2.1.0"
+
+    def test_exact_pin_beats_lower_bound_across_subprojects(self):
+        reqs = self._reqs({
+            "sub_a": {"numpy": (VersionSpecifier.EXACT, "1.26.4")},
+            "sub_b": {"numpy": (VersionSpecifier.GREATER_EQUAL, "1.25.0")},
+            "sub_c": {"numpy": (VersionSpecifier.GREATER_EQUAL, "1.24.0")},
+        })
+        result = ConflictResolver.resolve_requirements(reqs, outlier_map={})
+        assert result["numpy"].version.specifier == VersionSpecifier.EXACT
+        assert result["numpy"].version.version == "1.26.4"
+
+    def test_unconstrained_package_has_no_version(self):
+        reqs = {"sub_a": {"einops": Package(name="einops", version=None)}}
+        result = ConflictResolver.resolve_requirements(reqs, outlier_map={})
+        assert "einops" in result
+        assert result["einops"].version is None
+
+    def test_packages_from_multiple_subs_merged(self):
+        reqs = self._reqs({
+            "sub_a": {"numpy": (VersionSpecifier.GREATER_EQUAL, "1.25.0")},
+            "sub_b": {"torch": (VersionSpecifier.GREATER_EQUAL, "2.0.0")},
+        })
+        result = ConflictResolver.resolve_requirements(reqs, outlier_map={})
+        assert "numpy" in result
+        assert "torch" in result
+
+    def test_all_outlier_drops_package(self):
+        reqs = self._reqs({
+            "sub_a": {"old_pkg": (VersionSpecifier.EXACT, "0.1.0")},
+        })
+        result = ConflictResolver.resolve_requirements(
+            reqs, outlier_map={"old_pkg": ["sub_a"]}
+        )
+        assert "old_pkg" not in result
+
+    def test_empty_requirements_returns_empty(self):
+        result = ConflictResolver.resolve_requirements({}, outlier_map={})
+        assert result == {}

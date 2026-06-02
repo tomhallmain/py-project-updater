@@ -17,7 +17,6 @@ from py_project_updater.config import (
     DEFAULT_RECOVERY_DIR,
     DEFAULT_STASH_FILE_THRESHOLD,
     DEFAULT_STASH_LINE_THRESHOLD,
-    DEFAULT_VERSION_TOLERANCE,
     default_log_file_for_root,
 )
 from py_project_updater.orchestration import SubprojectManager
@@ -88,7 +87,6 @@ def main() -> None:
             test_mode=not args.execute,
             git_only=args.git_only,
             max_depth=args.max_depth,
-            version_tolerance=args.version_tolerance,
             main_weight=args.main_weight,
             outlier_threshold=args.outlier_threshold,
             stash_file_threshold=args.stash_file_threshold,
@@ -135,18 +133,6 @@ def _make_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_MAX_DEPTH,
         help="Maximum depth to search for requirements files",
-    )
-    p.add_argument(
-        "--version-tolerance",
-        choices=["none", "patch", "minor"],
-        default=DEFAULT_VERSION_TOLERANCE,
-        help=(
-            "How much version difference to tolerate before flagging a conflict. "
-            "'none': flag any difference; "
-            "'patch': allow matching patch versions (X.Y.*); "
-            "'minor': allow matching major versions only (X.*.*). "
-            f"Default: {DEFAULT_VERSION_TOLERANCE}"
-        ),
     )
     p.add_argument(
         "--main-weight",

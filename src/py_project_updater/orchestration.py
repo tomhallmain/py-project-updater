@@ -17,7 +17,6 @@ from py_project_updater.services.finder import SubprojectFinder
 from py_project_updater.services.git_commit import GitCommitChecker
 from py_project_updater.services.git import GitManager
 from py_project_updater.services.pip_installer import PipInstaller
-from py_project_updater.services.version_comparator import VersionComparator
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,6 @@ class SubprojectManager:
         test_mode: bool = False,
         git_only: bool = False,
         max_depth: int = 2,
-        version_tolerance: str = "minor",
         main_weight: float = DEFAULT_MAIN_WEIGHT,
         outlier_threshold: float = DEFAULT_OUTLIER_THRESHOLD,
         stash_file_threshold: float = DEFAULT_STASH_FILE_THRESHOLD,
@@ -44,7 +42,6 @@ class SubprojectManager:
         self.ignored_subprojects: set = set()
         self.main_requirements: Dict[str, Package] = {}
         self.outlier_map: Dict[str, List[str]] = {}
-        self.version_tolerance = version_tolerance
         self.main_weight = main_weight
         self.outlier_threshold = outlier_threshold
         self.stash_file_threshold = stash_file_threshold
@@ -110,7 +107,7 @@ class SubprojectManager:
     def run(self) -> None:
         """Run the subproject manager: discover subprojects, process each, then print summary."""
         self.process_subprojects()
-        print(self.reporter.get_summary())
+        logger.info("%s", self.reporter.get_summary())
 
     def process_subprojects(self) -> None:
         """Discover and process all subprojects."""
@@ -143,7 +140,7 @@ class SubprojectManager:
                     )
                 logger.info(
                     "Main project has uncommitted changes within stashing limits "
-                    "— will stash, pull, and restore."
+                    "— will stash tracked changes (if any), pull, and restore."
                 )
 
         active_subs = [
@@ -184,8 +181,66 @@ class SubprojectManager:
                 logger.error("Error processing subproject %s: %s", subproject.name, e)
                 raise
 
+        if not self.git_only:
+            all_sub_requirements = {
+                s.name: s.requirements
+                for s in subprojects
+                if s.name not in self.ignored_subprojects and s.requirements
+            }
+            self._run_pip_phase(all_sub_requirements, main_sub_name=main.name if main else None)
+
+    def _run_pip_phase(
+        self,
+        all_sub_requirements: Dict[str, Dict[str, Package]],
+        main_sub_name: Optional[str] = None,
+    ) -> None:
+        """Resolve and install the full requirement set once per package.
+
+        Drops outlier entries, picks the most constrained version spec for each
+        remaining package, then installs each unique package exactly once.
+        Conflict warnings (from VersionComparator) are emitted by resolve_requirements.
+        """
+        # Log outlier skips before installing so they appear in the summary.
+        for pkg_name, outlier_subs in self.outlier_map.items():
+            for sub_name in outlier_subs:
+                sub_req = all_sub_requirements.get(sub_name, {}).get(pkg_name)
+                version_str = str(sub_req.version) if sub_req and sub_req.version else "unspecified"
+                msg = (
+                    f"Skipped outlier: {pkg_name} in {sub_name} requires "
+                    f"{version_str}, which is below the version consensus"
+                )
+                logger.warning(msg)
+                self.reporter.log_operation(True, f"Warning: {msg}", project_name=sub_name)
+
+        resolved = ConflictResolver.resolve_requirements(
+            sub_requirements=all_sub_requirements,
+            outlier_map=self.outlier_map,
+            main_sub_name=main_sub_name,
+        )
+        if not resolved:
+            return
+
+        failed_packages: List[str] = []
+        for pkg_name in sorted(resolved):
+            package = resolved[pkg_name]
+            version_str = str(package.version) if package.version else None
+            success, error = self.pip_installer.install_package(
+                pkg_name, version_str, self.env_path
+            )
+            if success:
+                if not self.reporter.enabled:
+                    logger.info("Installed %s", package)
+                    self.reporter.log_operation(True, f"Installed {package}")
+            else:
+                logger.warning("Failed to install %s: %s", package, error)
+                self.reporter.log_operation(False, f"Failed to install {package}: {error}")
+                failed_packages.append(str(package))
+
+        if failed_packages:
+            logger.warning("Failed to install packages: %s", ", ".join(failed_packages))
+
     def process_subproject(self, subproject: SubprojectInfo) -> None:
-        """Process a single subproject: Git then pip (unless --git-only)."""
+        """Process a single subproject: Git operations only."""
         if subproject.path is None:
             return
         logger.info("Processing subproject: %s", subproject.name)
@@ -221,7 +276,7 @@ class SubprojectManager:
                             subproject.name, backup_path, backup_path,
                         )
                 if not success:
-                    logger.warning("Warning: Git update failed for %s", subproject.name)
+                    logger.warning("Git update failed for %s: %s", subproject.name, message)
                     self.reporter.log_operation(
                         False,
                         f"Git update failed: {message}",
@@ -233,6 +288,7 @@ class SubprojectManager:
                     logger.info("%s", message)
                     self.reporter.log_operation(True, message, project_name=subproject.name)
                 else:
+                    logger.info("Repository up to date")
                     self.reporter.log_operation(
                         True, "Repository up to date", project_name=subproject.name
                     )
@@ -243,63 +299,6 @@ class SubprojectManager:
                     subproject.last_commit_date = last_commit
                 else:
                     logger.info("Could not determine last commit date for %s", subproject.name)
-
-            if self.git_only:
-                logger.info("Skipping pip installations (--git-only mode)")
-                return
-
-            if self.main_requirements and subproject.path != self.root_path:
-                for package_name, package in subproject.requirements.items():
-                    main_pkg = self.main_requirements.get(package_name)
-                    if main_pkg and VersionComparator.compare_versions(main_pkg, package, self.version_tolerance):
-                        conflict_msg = (
-                            f"Version conflict for {package_name}: "
-                            f"main requires {main_pkg.version}, "
-                            f"subproject requires {package.version}"
-                        )
-                        logger.warning(conflict_msg)
-                        self.reporter.log_operation(
-                            True,
-                            f"Warning: {conflict_msg}",
-                            project_name=subproject.name,
-                        )
-
-            failed_packages: List[str] = []
-
-            for package_name, package in subproject.requirements.items():
-                if subproject.name in self.outlier_map.get(package_name, []):
-                    msg = (
-                        f"Skipped outlier: {package_name} in {subproject.name} "
-                        f"requires {package.version}, which is below the version consensus"
-                    )
-                    logger.warning(msg)
-                    self.reporter.log_operation(
-                        True, f"Warning: {msg}", project_name=subproject.name
-                    )
-                    continue
-
-                version_str = str(package.version) if package.version else None
-                success, error = self.pip_installer.install_package(
-                    package_name, version_str, self.env_path
-                )
-                if success:
-                    logger.info("Installed %s", package)
-                    self.reporter.log_operation(
-                        True, f"Installed {package}", project_name=subproject.name
-                    )
-                else:
-                    logger.warning("Failed to install %s: %s", package, error)
-                    self.reporter.log_operation(
-                        False,
-                        f"Failed to install {package}: {error}",
-                        project_name=subproject.name,
-                    )
-                    failed_packages.append(str(package))
-
-            if failed_packages:
-                error_msg = "Failed to install packages: " + ", ".join(failed_packages)
-                logger.warning("%s", error_msg)
-                subproject.error = error_msg
 
         except Exception as e:
             error_msg = f"Error processing subproject: {e!s}"

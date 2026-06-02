@@ -1,12 +1,17 @@
 """Statistical outlier detection for package version conflicts across subprojects."""
 
+import logging
 import math
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from packaging import version as pkg_version
 
 from py_project_updater.models import Package
+from py_project_updater.models.version import Version, VersionSpecifier
+from py_project_updater.services.version_comparator import VersionComparator
+
+logger = logging.getLogger(__name__)
 
 
 def _version_to_scalar(version_str: str) -> Optional[float]:
@@ -20,6 +25,108 @@ def _version_to_scalar(version_str: str) -> Optional[float]:
         return sum(part * (1000 ** (2 - i)) for i, part in enumerate(v.release[:3]))
     except pkg_version.InvalidVersion:
         return None
+
+
+_LOWER_BOUNDS = {VersionSpecifier.GREATER_EQUAL, VersionSpecifier.GREATER, VersionSpecifier.COMPATIBLE}
+_UPPER_BOUNDS = {VersionSpecifier.LESS_EQUAL, VersionSpecifier.LESS}
+
+
+def _pick_best_spec(
+    packages: List[Package],
+    main_package: Optional[Package] = None,
+) -> Tuple[Optional[Version], List[str]]:
+    """Return the most constrained Version from a list of Package specs, plus conflict warnings.
+
+    Priority: exact pins (==) beat lower bounds (>=, >, ~=) which beat upper
+    bounds (<, <=). Among same-priority specs, the numerically highest version
+    is used for pins and lower bounds; the numerically lowest for upper bounds.
+    Specs whose version string cannot be parsed are skipped.
+
+    If main_package is provided, its spec is treated as authoritative: if the
+    otherwise-winning candidate conflicts with main's spec, main's spec wins
+    instead. All specs that conflict with the final winner are returned as
+    human-readable warning strings.
+    """
+    versioned = [p.version for p in packages if p.version is not None]
+    main_v = main_package.version if main_package else None
+
+    def _safe_parse(v: Version):
+        try:
+            return pkg_version.parse(v.version)
+        except pkg_version.InvalidVersion:
+            return None
+
+    def _best(vs, *, use_max: bool) -> Optional[Version]:
+        candidates = [(v, _safe_parse(v)) for v in vs]
+        valid = [(v, p) for v, p in candidates if p is not None]
+        if not valid:
+            return None
+        chosen = max(valid, key=lambda x: x[1]) if use_max else min(valid, key=lambda x: x[1])
+        return chosen[0]
+
+    # --- Pass 1 + 2: select winner by priority, with main-project override ---
+    main_override = False
+    winner: Optional[Version] = None
+
+    # Priority 1: main exact pin wins outright
+    if main_v and main_v.specifier == VersionSpecifier.EXACT:
+        winner = main_v
+        main_override = True
+
+    # Priority 2–5: best spec from all packages, then check against main
+    if winner is None:
+        pins = [v for v in versioned if v.specifier == VersionSpecifier.EXACT]
+        candidate = _best(pins, use_max=True)
+
+        if candidate is None:
+            lowers = [v for v in versioned if v.specifier in _LOWER_BOUNDS]
+            candidate = _best(lowers, use_max=True)
+
+        if candidate is None:
+            uppers = [v for v in versioned if v.specifier in _UPPER_BOUNDS]
+            candidate = _best(uppers, use_max=False)
+
+        if candidate is not None and main_package is not None and main_v is not None:
+            cand_pkg = Package(name=main_package.name, version=candidate)
+            if VersionComparator.compare_versions(main_package, cand_pkg):
+                winner = main_v
+                main_override = True
+            else:
+                winner = candidate
+        else:
+            winner = candidate
+
+    # Fallback: if no winner yet and main has any spec, use it (e.g. package only in main)
+    if winner is None and main_v is not None:
+        winner = main_v
+        main_override = True
+
+    if winner is None:
+        return None, []
+
+    # --- Conflict warnings ---
+    pkg_name = packages[0].name if packages else (main_package.name if main_package else "unknown")
+    winner_pkg = Package(name=pkg_name, version=winner)
+    warnings: List[str] = []
+
+    for p in packages:
+        if p.version is None or p.version is winner:
+            continue
+        if VersionComparator.compare_versions(winner_pkg, p):
+            pkg_spec = str(p.version)
+            winner_spec = str(winner)
+            if main_override:
+                warnings.append(
+                    f"{pkg_name}{pkg_spec} conflicts with main requirement "
+                    f"{pkg_name}{winner_spec}; main requirement takes precedence"
+                )
+            else:
+                warnings.append(
+                    f"{pkg_name}{pkg_spec} conflicts with selected "
+                    f"{pkg_name}{winner_spec}; {pkg_name}{pkg_spec} will not be satisfied"
+                )
+
+    return winner, warnings
 
 
 class ConflictResolver:
@@ -178,3 +285,39 @@ class ConflictResolver:
                 results[package_name] = outliers
 
         return results
+
+    @staticmethod
+    def resolve_requirements(
+        sub_requirements: Dict[str, Dict[str, Package]],
+        outlier_map: Dict[str, List[str]],
+        main_sub_name: Optional[str] = None,
+    ) -> Dict[str, Package]:
+        """Collapse per-subproject requirements into one Package per package name.
+
+        Requirements where the subproject is listed as an outlier for that
+        package in outlier_map are dropped. Among the remaining specs for each
+        package, the most constrained version is selected via _pick_best_spec.
+
+        If main_sub_name is provided, that subproject's spec is passed as the
+        authoritative main_package to _pick_best_spec so conflicting specs are
+        detected and logged as warnings before installation.
+        """
+        collected: Dict[str, List[Package]] = {}
+        for sub_name, packages in sub_requirements.items():
+            for pkg_name, pkg in packages.items():
+                if sub_name in outlier_map.get(pkg_name, []):
+                    continue
+                collected.setdefault(pkg_name, []).append(pkg)
+
+        result: Dict[str, Package] = {}
+        for pkg_name, specs in collected.items():
+            main_pkg: Optional[Package] = None
+            if main_sub_name and main_sub_name not in outlier_map.get(pkg_name, []):
+                main_pkg = sub_requirements.get(main_sub_name, {}).get(pkg_name)
+
+            version, warnings = _pick_best_spec(specs, main_package=main_pkg)
+            for w in warnings:
+                logger.warning(w)
+            result[pkg_name] = Package(name=pkg_name, version=version)
+
+        return result

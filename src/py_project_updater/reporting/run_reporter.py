@@ -48,85 +48,30 @@ class RunReporter:
             if changes:
                 for change in changes:
                     logger.info(f"[TEST] Would make change: {change}")
-        else:
-            if success:
-                logger.info(message)
-            else:
-                logger.warning(message)
-
-    def _analyze_package_conflicts(
-        self,
-    ) -> Tuple[Dict[str, List[Tuple[str, str]]], Dict[str, List[str]]]:
-        """Analyze package installations for conflicts and unique installs."""
-        package_versions: Dict[str, Dict[str, str]] = {}
-        unique_packages: Dict[str, List[str]] = {}
-
-        for op in self.operations:
-            if not op.success or not op.project_name:
-                continue
-
-            if "installed" in op.message.lower():
-                parts = op.message.split()
-                if len(parts) >= 2:
-                    package_spec = parts[1]
-                    if "==" in package_spec:
-                        package, version = package_spec.split("==", 1)
-                    else:
-                        package = package_spec
-                        version = "any"
-
-                    if package not in package_versions:
-                        package_versions[package] = {}
-                    package_versions[package][op.project_name] = version
-
-        conflicts: Dict[str, List[Tuple[str, str]]] = {}
-        for package, versions in package_versions.items():
-            if len(versions) > 1:
-                unique_versions = set(versions.values())
-                if len(unique_versions) > 1:
-                    conflicts[package] = [(proj, ver) for proj, ver in versions.items()]
-            else:
-                project = next(iter(versions.keys()))
-                if project not in unique_packages:
-                    unique_packages[project] = []
-                unique_packages[project].append(package)
-
-        return conflicts, unique_packages
 
     def get_summary(self) -> str:
-        """Get a concise summary of all operations that would be performed."""
+        """Get a concise summary of all operations performed."""
         logger.debug(f"Total operations: {len(self.operations)}")
-        logger.debug(f"Operations: {self.operations}")
 
         project_ops: Dict[str, List[OperationResult]] = {}
         for op in self.operations:
             if op.project_name:
-                if op.project_name not in project_ops:
-                    project_ops[op.project_name] = []
-                project_ops[op.project_name].append(op)
+                project_ops.setdefault(op.project_name, []).append(op)
 
-        logger.debug(f"Projects with operations: {list(project_ops.keys())}")
-
-        summary = ["\nTest Mode Summary:"]
+        summary = ["\nTest Mode Summary:" if self.enabled else "\nRun Summary:"]
         success_projects: List[Tuple] = []
         warning_projects: List[Tuple[str, str]] = []
         error_projects: List[Tuple[str, str]] = []
         error_details: List[Tuple[str, str]] = []
 
         project_info = {p.name: p for p in self.subprojects}
-        logger.debug(f"Project info: {project_info}")
 
         for project, ops in project_ops.items():
-            logger.debug(f"Processing project: {project}")
             if project_info.get(project) and project_info[project].path == self.root_path:
-                logger.debug(f"Skipping main project: {project}")
                 continue
 
             has_errors = any(not op.success for op in ops)
             has_warnings = any("warning" in op.message.lower() for op in ops)
-            install_count = sum(
-                1 for op in ops if op.success and "installed" in op.message.lower()
-            )
 
             git_status = None
             git_operation = None
@@ -154,12 +99,8 @@ class RunReporter:
                 )
             else:
                 success_projects.append(
-                    (project, install_count, git_status, git_operation, subproject_error)
+                    (project, git_status, git_operation, subproject_error)
                 )
-
-        logger.debug(f"Success projects: {success_projects}")
-        logger.debug(f"Warning projects: {warning_projects}")
-        logger.debug(f"Error projects: {error_projects}")
 
         def sort_key(item):
             project_name = item[0]
@@ -200,54 +141,50 @@ class RunReporter:
 
         if success_projects:
             summary.append("\nSuccessful projects:")
-            max_name_len = max(len(name) for name, _, _, _, _ in success_projects) + 1
-            max_pkg_len = (
-                max(len(str(install_count)) for _, install_count, _, _, _ in success_projects)
-                + 1
-            )
+            max_name_len = max(len(name) for name, _, _, _ in success_projects) + 1
             max_git_len = (
-                max(len(git_status or "") for _, _, git_status, _, _ in success_projects) + 1
+                max(len(git_status or "") for _, git_status, _, _ in success_projects) + 1
             )
-            max_error_len = max(len(error or "") for _, _, _, _, error in success_projects) + 1
+            max_error_len = max(len(error or "") for _, _, _, error in success_projects) + 1
 
             summary.append(
-                f"  {'Project':<{max_name_len}}  {'Pkgs':<{max_pkg_len}}  "
+                f"  {'Project':<{max_name_len}}  "
                 f"{'Git Status':<{max_git_len}}  {'Operation':<10}  {'Error':<{max_error_len}}"
             )
 
-            for name, install_count, git_status, git_operation, error in sorted(
+            for name, git_status, git_operation, error in sorted(
                 success_projects, key=sort_key
             ):
-                install_str = str(install_count) if install_count else ""
                 operation = f"({git_operation})" if git_operation else ""
                 error_fmt = (
                     error.replace("\n", "\n" + " " * (max_name_len + 4)) if error else ""
                 )
                 summary.append(
-                    f"  {name:<{max_name_len}}  {install_str:<{max_pkg_len}}  "
+                    f"  {name:<{max_name_len}}  "
                     f"{git_status or '':<{max_git_len}}  {operation:<10}  "
                     f"{error_fmt or '':<{max_error_len}}"
                 )
 
-        conflicts, unique_packages = self._analyze_package_conflicts()
-
-        if conflicts:
-            summary.append("\nPackage version conflicts:")
-            max_pkg_len = max(len(pkg) for pkg in conflicts.keys())
-            for package, versions in conflicts.items():
-                summary.append(
-                    f"  {package:<{max_pkg_len}}  "
-                    f"{', '.join(f'{proj}:{ver}' for proj, ver in versions)}"
-                )
-
-        if unique_packages:
-            summary.append("\nUnique package installations:")
-            max_proj_len = max(len(proj) for proj in unique_packages.keys())
-            for project, packages in unique_packages.items():
-                if packages:
-                    summary.append(
-                        f"  {project:<{max_proj_len}}  {', '.join(sorted(packages))}"
-                    )
+        # Global pip phase results — no project_name, message contains "install"
+        pip_ops = [
+            op for op in self.operations
+            if op.project_name is None and "install" in op.message.lower()
+        ]
+        if pip_ops:
+            if self.enabled:
+                pip_count = sum(1 for op in pip_ops if op.success)
+                summary.append(f"\nWould install: {pip_count} package{'s' if pip_count != 1 else ''}")
+            else:
+                pip_success = [op for op in pip_ops if op.success]
+                pip_failed = [op for op in pip_ops if not op.success]
+                line = f"\nPackages installed: {len(pip_success)}"
+                if pip_failed:
+                    line += f"  ({len(pip_failed)} failed)"
+                summary.append(line)
+                if pip_failed:
+                    summary.append("  Failed:")
+                    for op in pip_failed:
+                        summary.append(f"    {op.message}")
 
         if error_details:
             summary.append("\nDetailed Error Information:")
