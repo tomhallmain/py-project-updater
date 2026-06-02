@@ -134,7 +134,8 @@ class RunReporter:
                 if op.success and (
                     "pull" in op.message.lower() or "fetch" in op.message.lower()
                 ):
-                    git_operation = "pull" if "pull" in op.message.lower() else "fetch"
+                    action = "pull" if "pull" in op.message.lower() else "fetch"
+                    git_operation = f"would {action}" if op.message.lower().startswith("would") else action
                 elif op.success and "status" in op.message.lower():
                     git_status = op.message.split(":")[-1].strip()
 

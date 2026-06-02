@@ -64,9 +64,10 @@ def main() -> None:
                 "Pip installations may fail on locked extension modules. "
                 "Consider stopping any running processes before proceeding."
             )
-        if not _confirm_execute(args):
-            logger.info("Update cancelled.")
-            return
+
+    if not _confirm_run(args):
+        logger.info("Run cancelled.")
+        return
 
     logger.info("Starting subproject manager with root path: %s", args.root_path)
     logger.info("Using environment: %s", args.env_path)
@@ -277,24 +278,31 @@ def _is_env_in_use(python_exe: Path) -> bool:
         return False
 
 
-def _confirm_execute(args: argparse.Namespace) -> bool:
-    """Prompt the user to confirm before running in execute mode.
+def _confirm_run(args: argparse.Namespace) -> bool:
+    """Prompt the user to confirm before running in either mode.
 
     Returns True to proceed, False to cancel. Skips the prompt and returns
     True automatically when stdin is not a terminal (scripts, CI).
     """
     if not sys.stdin.isatty():
-        logger.info("Non-interactive session — skipping execute confirmation.")
+        logger.info("Non-interactive session — skipping confirmation.")
         return True
 
-    print("\nAbout to run in EXECUTE mode. The following changes will be made:")
-    print(f"  Root path  : {args.root_path}")
-    print(f"  Environment: {args.env_path}")
-    if args.git_only:
-        print("  Git operations only (no pip installations)")
+    if args.execute:
+        print("\nAbout to run in EXECUTE mode. The following changes will be made:")
+        print(f"  Root path  : {args.root_path}")
+        print(f"  Environment: {args.env_path}")
+        if args.git_only:
+            print("  Git operations only (no pip installations)")
+        else:
+            print("  Git repositories will be updated")
+            print("  Packages will be installed into the environment")
     else:
-        print("  Git repositories will be updated")
-        print("  Packages will be installed into the environment")
+        print("\nAbout to run in TEST mode. No changes will be made.")
+        print(f"  Root path  : {args.root_path}")
+        print(f"  Environment: {args.env_path}")
+        print("  Git status will be checked (read-only)")
+        print("  A summary of what would happen will be shown")
     print()
 
     try:
@@ -310,13 +318,23 @@ def _configure_logging(
     level: str = "INFO",
     log_file: Optional[Path] = None,
 ) -> None:
-    """Configure logging to console and optionally to a file."""
-    handlers: List[logging.Handler] = [logging.StreamHandler()]
-    if log_file is not None:
-        handlers.append(logging.FileHandler(log_file))
+    """Configure logging to console and optionally to a file.
 
-    logging.basicConfig(
-        level=getattr(logging, level),
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        handlers=handlers,
-    )
+    Configures the root logger directly rather than using basicConfig, which
+    is a no-op when handlers are already present (e.g. when launched as a
+    console script entry point).
+    """
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, level))
+    root.handlers.clear()
+
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    root.addHandler(console)
+
+    if log_file is not None:
+        fh = logging.FileHandler(log_file, encoding="utf-8")
+        fh.setFormatter(formatter)
+        root.addHandler(fh)
