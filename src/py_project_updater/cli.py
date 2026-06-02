@@ -14,6 +14,9 @@ from py_project_updater.config import (
     DEFAULT_MAIN_WEIGHT,
     DEFAULT_MAX_DEPTH,
     DEFAULT_OUTLIER_THRESHOLD,
+    DEFAULT_RECOVERY_DIR,
+    DEFAULT_STASH_FILE_THRESHOLD,
+    DEFAULT_STASH_LINE_THRESHOLD,
     DEFAULT_VERSION_TOLERANCE,
     default_log_file_for_root,
 )
@@ -88,6 +91,9 @@ def main() -> None:
             version_tolerance=args.version_tolerance,
             main_weight=args.main_weight,
             outlier_threshold=args.outlier_threshold,
+            stash_file_threshold=args.stash_file_threshold,
+            stash_line_threshold=args.stash_line_threshold,
+            recovery_dir=args.recovery_dir,
         )
         ignore = set(DEFAULT_IGNORE) | set(args.ignore or [])
         manager.set_ignored_subprojects(list(ignore))
@@ -160,6 +166,35 @@ def _make_parser() -> argparse.ArgumentParser:
             "Number of weighted standard deviations below the consensus mean at which "
             "a subproject's package requirement is treated as an outlier and skipped. "
             f"Default: {DEFAULT_OUTLIER_THRESHOLD}"
+        ),
+    )
+    p.add_argument(
+        "--stash-file-threshold",
+        type=float,
+        default=DEFAULT_STASH_FILE_THRESHOLD,
+        help=(
+            "Maximum ratio of changed files to total tracked files before a subproject's "
+            "local changes are considered too large to stash safely (0–1). "
+            f"Default: {DEFAULT_STASH_FILE_THRESHOLD}"
+        ),
+    )
+    p.add_argument(
+        "--stash-line-threshold",
+        type=int,
+        default=DEFAULT_STASH_LINE_THRESHOLD,
+        help=(
+            "Maximum number of lines changed in any single file before a subproject's "
+            "local changes are considered too large to stash safely. "
+            f"Default: {DEFAULT_STASH_LINE_THRESHOLD}"
+        ),
+    )
+    p.add_argument(
+        "--recovery-dir",
+        type=Path,
+        default=DEFAULT_RECOVERY_DIR,
+        help=(
+            "Directory where patch backups are written when a stash pop fails. "
+            f"Default: {DEFAULT_RECOVERY_DIR}"
         ),
     )
     p.add_argument(

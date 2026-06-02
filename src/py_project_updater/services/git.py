@@ -333,66 +333,194 @@ class GitManager:
         except Exception:
             return False
 
+    def check_change_volume(
+        self,
+        path: Path,
+        file_threshold: float = 0.10,
+        line_threshold: int = 150,
+    ) -> Tuple[bool, str]:
+        """Check whether uncommitted changes are within safe stashing limits.
+
+        Returns (True, "") if within limits, or (False, reason) if either
+        threshold is exceeded:
+        - file_threshold: changed files / total tracked files
+        - line_threshold: max lines changed in any single file
+
+        Binary files count toward the file ratio but are excluded from the
+        per-file line check (git reports '-' for their line counts).
+        """
+        try:
+            numstat = subprocess.run(
+                ["git", "diff", "--numstat", "HEAD"],
+                cwd=path, capture_output=True, text=True,
+            )
+            if numstat.returncode != 0:
+                return False, f"Could not measure changes: {numstat.stderr.strip()}"
+
+            ls = subprocess.run(
+                ["git", "ls-files"],
+                cwd=path, capture_output=True, text=True,
+            )
+            if ls.returncode != 0:
+                return False, f"Could not count tracked files: {ls.stderr.strip()}"
+
+            total_tracked = len([f for f in ls.stdout.strip().split("\n") if f])
+            if total_tracked == 0:
+                return True, ""
+
+            entries = [l for l in numstat.stdout.strip().split("\n") if l]
+            if not entries:
+                return True, ""
+
+            ratio = len(entries) / total_tracked
+            if ratio > file_threshold:
+                return False, (
+                    f"{len(entries)} of {total_tracked} tracked files changed "
+                    f"({ratio:.0%} exceeds {file_threshold:.0%} file threshold)"
+                )
+
+            for entry in entries:
+                parts = entry.split("\t")
+                if len(parts) < 3 or parts[0] == "-":  # binary file
+                    continue
+                try:
+                    total_lines = int(parts[0]) + int(parts[1])
+                    if total_lines > line_threshold:
+                        return False, (
+                            f"{parts[2]} has {total_lines} lines changed "
+                            f"(exceeds {line_threshold} line threshold)"
+                        )
+                except ValueError:
+                    continue
+
+            return True, ""
+
+        except Exception as e:
+            return False, str(e)
+
+    def _fetch_only(self, path: Path) -> Tuple[bool, str, None]:
+        """Fall back to a bare git fetch, returning a 3-tuple for consistency."""
+        try:
+            result = subprocess.run(
+                ["git", "fetch"],
+                cwd=path, capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                return True, "Fetched changes (repository not clean)", None
+            return False, f"Failed to fetch changes: {result.stderr.strip()}", None
+        except Exception as e:
+            return False, f"Error fetching: {str(e)}", None
+
     def update_repository(
         self,
         path: Path,
         status: Optional[Tuple[bool, str, bool]] = None,
-    ) -> Tuple[bool, str]:
-        """Update the repository based on its status.
+        file_threshold: float = 0.10,
+        line_threshold: int = 150,
+    ) -> Tuple[bool, str, Optional[str]]:
+        """Update the repository based on its current status.
 
-        Pass the result of a prior get_git_status call as `status` to avoid
-        running the subprocess a second time.
+        For clean repos: artifact cleanup then git pull.
+        For dirty repos: safety check → stash → pull → pop, falling back to
+        fetch if the safety thresholds are exceeded or stash fails.
+
+        Returns (success, message, stash_diff). stash_diff is the exported
+        unified diff when a stash pop failed so the caller can save a recovery
+        patch; None in all other cases.
         """
         is_clean, status_msg, was_cleaned_by_filtering = (
             status if status is not None else self.get_git_status(path)
         )
 
         if self.reporter.enabled:
-            if not is_clean or "up to date" not in status_msg.lower():
-                operation = "pull" if is_clean else "fetch"
+            if not is_clean:
                 self.reporter.log_operation(
                     True,
-                    f"Would {operation} changes for {path}",
-                    f"git {operation}",
+                    f"Would stash, pull, and restore changes for {path}",
+                    "git stash push && git pull && git stash pop",
                     [f"Update repository at {path}"],
                 )
-                return True, f"Would {operation} changes"
-            return True, "Repository up to date"
+                return True, "Would stash, pull, and restore changes", None
+            if "up to date" not in status_msg.lower():
+                self.reporter.log_operation(
+                    True,
+                    f"Would pull changes for {path}",
+                    "git pull",
+                    [f"Update repository at {path}"],
+                )
+                return True, "Would pull changes", None
+            return True, "Repository up to date", None
 
         try:
             if is_clean:
                 if was_cleaned_by_filtering:
                     self._clean_python_artifacts(path)
-
                 is_clean_after, status_after, _ = self.get_git_status(path)
                 if not is_clean_after:
                     logger.warning(
-                        f"Repository still not clean after cleaning artifacts: "
-                        f"{status_after}"
+                        "Repository still not clean after artifact cleanup: %s", status_after
                     )
-                    return False, f"Repository not clean: {status_after}"
+                    return False, f"Repository not clean: {status_after}", None
 
-                pull_result = subprocess.run(
-                    ["git", "pull"],
-                    cwd=path,
-                    capture_output=True,
-                    text=True,
+                pull = subprocess.run(
+                    ["git", "pull"], cwd=path, capture_output=True, text=True,
                 )
-                if pull_result.returncode == 0:
-                    changes = pull_result.stdout.strip()
-                    if changes:
-                        return True, f"Pulled changes: {changes}"
-                    return True, "Repository up to date"
-                return False, f"Failed to pull changes: {pull_result.stderr.strip()}"
-            else:
-                fetch_result = subprocess.run(
-                    ["git", "fetch"],
-                    cwd=path,
-                    capture_output=True,
-                    text=True,
+                if pull.returncode == 0:
+                    changes = pull.stdout.strip()
+                    return True, (f"Pulled changes: {changes}" if changes else "Repository up to date"), None
+                return False, f"Failed to pull changes: {pull.stderr.strip()}", None
+
+            # --- Dirty repo: stash → pull → pop ---
+
+            volume_ok, volume_reason = self.check_change_volume(
+                path, file_threshold=file_threshold, line_threshold=line_threshold
+            )
+            if not volume_ok:
+                logger.warning(
+                    "Change volume too large to stash safely in %s: %s",
+                    path.name, volume_reason,
                 )
-                if fetch_result.returncode == 0:
-                    return True, "Fetched changes (repository not clean)"
-                return False, f"Failed to fetch changes: {fetch_result.stderr.strip()}"
+                return self._fetch_only(path)
+
+            stash_ok, stash_msg = self.stash_changes(path)
+            if not stash_ok:
+                if stash_msg == "nothing to stash":
+                    # Untracked-only repo — pull directly
+                    pull = subprocess.run(
+                        ["git", "pull"], cwd=path, capture_output=True, text=True,
+                    )
+                    if pull.returncode == 0:
+                        changes = pull.stdout.strip()
+                        return True, (f"Pulled changes: {changes}" if changes else "Repository up to date"), None
+                    return False, f"Failed to pull: {pull.stderr.strip()}", None
+                logger.warning("Stash failed for %s: %s", path.name, stash_msg)
+                return self._fetch_only(path)
+
+            pull = subprocess.run(
+                ["git", "pull"], cwd=path, capture_output=True, text=True,
+            )
+            if pull.returncode != 0:
+                self.pop_stash(path)
+                return False, f"Failed to pull (stash restored): {pull.stderr.strip()}", None
+
+            pop_ok, pop_output = self.pop_stash(path)
+            if pop_ok:
+                changes = pull.stdout.strip()
+                return True, (
+                    f"Pulled and restored local changes: {changes}" if changes
+                    else "Pulled and restored local changes"
+                ), None
+
+            # Pop failed — export diff, clean up, return diff for backup
+            stash_diff = self.export_stash(path)
+            self.drop_stash(path)
+            subprocess.run(
+                ["git", "reset", "--hard", "HEAD"],
+                cwd=path, capture_output=True, text=True,
+            )
+            return False, (
+                f"Pulled but stash pop failed — local changes need recovery: {pop_output}"
+            ), stash_diff
+
         except Exception as e:
-            return False, f"Error updating repository: {str(e)}"
+            return False, f"Error updating repository: {str(e)}", None
