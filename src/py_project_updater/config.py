@@ -6,6 +6,8 @@ from typing import List
 # Defaults for CLI and behaviour (config file support can be added later)
 DEFAULT_MAX_DEPTH = 3
 DEFAULT_VERSION_TOLERANCE = "minor"  # "none" | "patch" | "minor"
+DEFAULT_MAIN_WEIGHT = 0.7        # fraction of weight given to the main project's version
+DEFAULT_OUTLIER_THRESHOLD = 2.0  # standard deviations below mean to count as an outlier
 DEFAULT_IGNORE: List[str] = [
     "venv",
     ".git",

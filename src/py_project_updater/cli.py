@@ -11,7 +11,9 @@ from typing import List, Optional
 from py_project_updater.config import (
     DEFAULT_IGNORE,
     DEFAULT_LOG_LEVEL,
+    DEFAULT_MAIN_WEIGHT,
     DEFAULT_MAX_DEPTH,
+    DEFAULT_OUTLIER_THRESHOLD,
     DEFAULT_VERSION_TOLERANCE,
     default_log_file_for_root,
 )
@@ -71,6 +73,8 @@ def main() -> None:
             git_only=args.git_only,
             max_depth=args.max_depth,
             version_tolerance=args.version_tolerance,
+            main_weight=args.main_weight,
+            outlier_threshold=args.outlier_threshold,
         )
         ignore = set(DEFAULT_IGNORE) | set(args.ignore or [])
         manager.set_ignored_subprojects(list(ignore))
@@ -123,6 +127,26 @@ def _make_parser() -> argparse.ArgumentParser:
             "'patch': allow matching patch versions (X.Y.*); "
             "'minor': allow matching major versions only (X.*.*). "
             f"Default: {DEFAULT_VERSION_TOLERANCE}"
+        ),
+    )
+    p.add_argument(
+        "--main-weight",
+        type=float,
+        default=DEFAULT_MAIN_WEIGHT,
+        help=(
+            "Weight given to the main project's version when computing the consensus "
+            "for outlier detection (0–1, remainder shared equally across subprojects). "
+            f"Default: {DEFAULT_MAIN_WEIGHT}"
+        ),
+    )
+    p.add_argument(
+        "--outlier-threshold",
+        type=float,
+        default=DEFAULT_OUTLIER_THRESHOLD,
+        help=(
+            "Number of weighted standard deviations below the consensus mean at which "
+            "a subproject's package requirement is treated as an outlier and skipped. "
+            f"Default: {DEFAULT_OUTLIER_THRESHOLD}"
         ),
     )
     p.add_argument(

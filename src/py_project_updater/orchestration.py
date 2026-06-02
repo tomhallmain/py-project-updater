@@ -6,6 +6,7 @@ from typing import Dict, List
 
 from py_project_updater.models import Package, SubprojectInfo
 from py_project_updater.reporting import RunReporter
+from py_project_updater.services.conflict_resolver import ConflictResolver
 from py_project_updater.services.finder import SubprojectFinder
 from py_project_updater.services.git_commit import GitCommitChecker
 from py_project_updater.services.git import GitManager
@@ -26,12 +27,17 @@ class SubprojectManager:
         git_only: bool = False,
         max_depth: int = 2,
         version_tolerance: str = "minor",
+        main_weight: float = 0.7,
+        outlier_threshold: float = 2.0,
     ):
         self.root_path = root_path
         self.env_path = env_path
         self.ignored_subprojects: set = set()
         self.main_requirements: Dict[str, Package] = {}
+        self.outlier_map: Dict[str, List[str]] = {}
         self.version_tolerance = version_tolerance
+        self.main_weight = main_weight
+        self.outlier_threshold = outlier_threshold
         self.reporter = RunReporter(enabled=test_mode, root_path=root_path)
         self.git_manager = GitManager(self.reporter)
         self.pip_installer = PipInstaller(self.reporter)
@@ -58,6 +64,34 @@ class SubprojectManager:
             logger.info(
                 "Loaded %d main project requirements for conflict checking",
                 len(self.main_requirements),
+            )
+
+        active_subs = [
+            s for s in subprojects
+            if s.path != self.root_path and s.name not in self.ignored_subprojects and s.path
+        ]
+
+        main_commit_date = GitCommitChecker.get_last_commit_date(self.root_path)
+        sub_commit_dates = {
+            s.name: GitCommitChecker.get_last_commit_date(s.path)
+            for s in active_subs
+        }
+        sub_recency_factors = ConflictResolver.compute_recency_factors(
+            main_commit_date=main_commit_date,
+            sub_commit_dates=sub_commit_dates,
+        )
+
+        sub_requirements = {s.name: s.requirements for s in active_subs}
+        self.outlier_map = ConflictResolver.find_outliers(
+            main_requirements=self.main_requirements,
+            sub_requirements=sub_requirements,
+            main_weight=self.main_weight,
+            std_threshold=self.outlier_threshold,
+            sub_recency_factors=sub_recency_factors,
+        )
+        for pkg, outlier_subs in self.outlier_map.items():
+            logger.info(
+                "Outlier subprojects for %s: %s", pkg, ", ".join(outlier_subs)
             )
 
         for subproject in subprojects:
@@ -140,6 +174,17 @@ class SubprojectManager:
             failed_packages: List[str] = []
 
             for package_name, package in subproject.requirements.items():
+                if subproject.name in self.outlier_map.get(package_name, []):
+                    msg = (
+                        f"Skipped outlier: {package_name} in {subproject.name} "
+                        f"requires {package.version}, which is below the version consensus"
+                    )
+                    logger.warning(msg)
+                    self.reporter.log_operation(
+                        True, f"Warning: {msg}", project_name=subproject.name
+                    )
+                    continue
+
                 version_str = str(package.version) if package.version else None
                 success, error = self.pip_installer.install_package(
                     package_name, version_str, self.env_path
