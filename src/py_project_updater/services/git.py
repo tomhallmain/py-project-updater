@@ -233,6 +233,106 @@ class GitManager:
         except Exception as e:
             return False, f"Error checking Git status: {str(e)}", False
 
+    def stash_changes(self, path: Path) -> Tuple[bool, str]:
+        """Stash tracked local changes.
+
+        Returns (True, "stash@{0}") when changes were stashed,
+        (False, "nothing to stash") when the working tree had no tracked
+        changes, or (False, error) on failure.
+        """
+        if self.reporter.enabled:
+            self.reporter.log_operation(
+                True,
+                f"Would stash changes in {path}",
+                'git stash push -m "py_project_updater"',
+            )
+            return True, "stash@{0}"
+
+        try:
+            result = subprocess.run(
+                ["git", "stash", "push", "-m", "py_project_updater"],
+                cwd=path,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return False, result.stderr.strip() or "git stash push failed"
+            if "no local changes to save" in result.stdout.lower():
+                return False, "nothing to stash"
+            return True, "stash@{0}"
+        except Exception as e:
+            return False, str(e)
+
+    def pop_stash(self, path: Path) -> Tuple[bool, str]:
+        """Apply and drop the top stash entry.
+
+        Returns (True, "") on a clean apply. Returns (False, output) on
+        failure — the stash entry is intentionally left in place so the
+        caller can export the diff before dropping.
+        """
+        if self.reporter.enabled:
+            self.reporter.log_operation(
+                True,
+                f"Would pop stash in {path}",
+                "git stash pop",
+            )
+            return True, ""
+
+        try:
+            result = subprocess.run(
+                ["git", "stash", "pop"],
+                cwd=path,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return True, ""
+            combined = "\n".join(
+                filter(None, [result.stdout.strip(), result.stderr.strip()])
+            )
+            return False, combined
+        except Exception as e:
+            return False, str(e)
+
+    def export_stash(self, path: Path) -> Optional[str]:
+        """Return the unified diff of the top stash entry, or None on failure.
+
+        Called after a failed pop_stash to capture the patch before dropping.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "stash", "show", "-p"],
+                cwd=path,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout
+            return None
+        except Exception:
+            return None
+
+    def drop_stash(self, path: Path) -> bool:
+        """Drop the top stash entry. Returns True on success."""
+        if self.reporter.enabled:
+            self.reporter.log_operation(
+                True,
+                f"Would drop stash in {path}",
+                "git stash drop",
+            )
+            return True
+
+        try:
+            result = subprocess.run(
+                ["git", "stash", "drop"],
+                cwd=path,
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
     def update_repository(
         self,
         path: Path,
